@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Experiment outputs (large JSON files with raw model responses)
+# results/
+# figures/
+
+# Data cache (HuggingFace datasets)
+data/*.cache
+.cache/

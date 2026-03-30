@@ -1,0 +1,8 @@
+ollama
+datasets
+scipy
+numpy
+pandas
+matplotlib
+seaborn
+tqdm
