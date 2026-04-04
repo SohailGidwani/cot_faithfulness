@@ -1,340 +1,265 @@
-"""Generate plots and tables from aggregated results."""
-
-import json
-import os
-import argparse
-
-import matplotlib.pyplot as plt
-import matplotlib
+from __future__ import annotations
+import json, os, argparse
 import numpy as np
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import seaborn as sns
 
-matplotlib.use("Agg")  # Non-interactive backend
-sns.set_theme(style="whitegrid", font_scale=1.1)
+import config
+from config import CORRUPTION_CONDITIONS, HINT_TEMPLATES
 
-from config import FIGURES_DIR, RESULTS_DIR, CORRUPTION_CONDITIONS, HINT_TEMPLATES
+plt.rcParams.update({"font.size": 11})
 
 
-def load_aggregated(input_dir: str = RESULTS_DIR) -> dict:
-    path = os.path.join(input_dir, "aggregated_results.json")
-    with open(path) as f:
+def _load_agg(input_dir=config.RESULTS_DIR):
+    with open(os.path.join(input_dir, "aggregated_results.json")) as f:
         return json.load(f)
 
 
-# ---------- Plot 1: Baseline Accuracy Comparison ----------
+# -------- baseline bar chart --------
 
-def plot_baseline(data: dict, output_dir: str = FIGURES_DIR) -> None:
-    """Bar chart comparing No-CoT vs CoT accuracy across models and datasets."""
-    os.makedirs(output_dir, exist_ok=True)
-    baseline = data["baseline"]
+def plot_baseline(data, outdir):
+    os.makedirs(outdir, exist_ok=True)
+    bl = data["baseline"]
+    mdls = list(bl.keys())
+    dsets = list(next(iter(bl.values())).keys()) if bl else []
 
-    models = list(baseline.keys())
-    datasets = list(next(iter(baseline.values())).keys()) if baseline else []
-
-    fig, axes = plt.subplots(1, len(datasets), figsize=(6 * len(datasets), 5), squeeze=False)
-
-    for j, dataset in enumerate(datasets):
+    fig, axes = plt.subplots(1, len(dsets), figsize=(6 * len(dsets), 5),
+                             squeeze=False)
+    for j, ds in enumerate(dsets):
         ax = axes[0][j]
-        no_cot_vals = []
-        cot_vals = []
-        labels = []
+        nc_vals, c_vals, lbls = [], [], []
+        for m in mdls:
+            if ds in bl[m]:
+                nc_vals.append(bl[m][ds]["no_cot_accuracy"])
+                c_vals.append(bl[m][ds]["cot_accuracy"])
+                lbls.append(m)
 
-        for model in models:
-            if dataset in baseline[model]:
-                no_cot_vals.append(baseline[model][dataset]["no_cot_accuracy"])
-                cot_vals.append(baseline[model][dataset]["cot_accuracy"])
-                labels.append(model)
-
-        x = np.arange(len(labels))
-        width = 0.35
-
-        bars1 = ax.bar(x - width / 2, no_cot_vals, width, label="No CoT", color="#5B9BD5")
-        bars2 = ax.bar(x + width / 2, cot_vals, width, label="CoT", color="#ED7D31")
-
+        x = np.arange(len(lbls))
+        w = 0.35
+        b1 = ax.bar(x - w/2, nc_vals, w, label="No CoT", color="#5B9BD5")
+        b2 = ax.bar(x + w/2, c_vals, w, label="CoT", color="#ED7D31")
         ax.set_ylabel("Accuracy")
-        ax.set_title(f"Baseline: {dataset.upper()}")
+        ax.set_title("Baseline: " + ds.upper())
         ax.set_xticks(x)
-        ax.set_xticklabels(labels, rotation=15, ha="right")
+        ax.set_xticklabels(lbls, rotation=15, ha="right")
         ax.set_ylim(0, 1.0)
         ax.legend()
-
-        # Add value labels
-        for bar in bars1:
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-                    f"{bar.get_height():.2f}", ha="center", va="bottom", fontsize=9)
-        for bar in bars2:
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-                    f"{bar.get_height():.2f}", ha="center", va="bottom", fontsize=9)
+        for bar in list(b1) + list(b2):
+            ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+                    "%.2f" % bar.get_height(), ha="center", va="bottom",
+                    fontsize=9)
 
     plt.tight_layout()
-    path = os.path.join(output_dir, "baseline_accuracy.png")
-    plt.savefig(path, dpi=150)
-    plt.close()
-    print(f"  Saved {path}")
+    p = os.path.join(outdir, "baseline_accuracy.png")
+    plt.savefig(p, dpi=150); plt.close()
+    print("  Saved", p)
 
 
-# ---------- Plot 2: SCR by Step (Truncation) ----------
+# -------- truncation SCR lines --------
 
-def plot_truncation(data: dict, output_dir: str = FIGURES_DIR) -> None:
-    """Line plot of SCR by truncation step for each model/dataset."""
-    os.makedirs(output_dir, exist_ok=True)
-    truncation = data["truncation"]
+def plot_truncation(data, outdir):
+    os.makedirs(outdir, exist_ok=True)
+    trunc = data["truncation"]
+    mdls = list(trunc.keys())
+    dsets = sorted(set(d for m in mdls for d in trunc[m]))
 
-    models = list(truncation.keys())
-    datasets = set()
-    for m in models:
-        datasets.update(truncation[m].keys())
-    datasets = sorted(datasets)
+    fig, axes = plt.subplots(1, len(dsets), figsize=(7*len(dsets), 5),
+                             squeeze=False)
+    pal = sns.color_palette("tab10", len(mdls))
 
-    fig, axes = plt.subplots(1, len(datasets), figsize=(7 * len(datasets), 5), squeeze=False)
-
-    colors = sns.color_palette("husl", len(models))
-
-    for j, dataset in enumerate(datasets):
+    for j, ds in enumerate(dsets):
         ax = axes[0][j]
-
-        for i, model in enumerate(models):
-            if dataset not in truncation[model]:
+        for i, m in enumerate(mdls):
+            if ds not in trunc[m]:
                 continue
-            scr_data = truncation[model][dataset]["scr_by_step"]
-            if not scr_data:
+            rows = trunc[m][ds]["scr_by_step"]
+            if not rows:
                 continue
-
-            steps = [d["step_k"] for d in scr_data]
-            scr_vals = [d["scr"] for d in scr_data]
-            ci_lower = [d["ci_lower"] for d in scr_data]
-            ci_upper = [d["ci_upper"] for d in scr_data]
-
-            ax.plot(steps, scr_vals, marker="o", label=model, color=colors[i])
-            ax.fill_between(steps, ci_lower, ci_upper, alpha=0.15, color=colors[i])
-
+            ks = [r["step_k"] for r in rows]
+            vals = [r["scr"] for r in rows]
+            lo = [r["ci_lower"] for r in rows]
+            hi = [r["ci_upper"] for r in rows]
+            ax.plot(ks, vals, "o-", label=m, color=pal[i])
+            ax.fill_between(ks, lo, hi, alpha=0.15, color=pal[i])
         ax.set_xlabel("Truncation Step (k)")
         ax.set_ylabel("Step Consistency Rate (SCR)")
-        ax.set_title(f"Truncation: {dataset.upper()}")
+        ax.set_title("Truncation: " + ds.upper())
         ax.set_ylim(0, 1.05)
         ax.legend()
 
     plt.tight_layout()
-    path = os.path.join(output_dir, "truncation_scr.png")
-    plt.savefig(path, dpi=150)
-    plt.close()
-    print(f"  Saved {path}")
+    p = os.path.join(outdir, "truncation_scr.png")
+    plt.savefig(p, dpi=150); plt.close()
+    print("  Saved", p)
 
 
-# ---------- Plot 3: CFR by Corruption Condition ----------
+# -------- corruption CFR grouped bars --------
 
-def plot_corruption(data: dict, output_dir: str = FIGURES_DIR) -> None:
-    """Grouped bar chart of CFR by corruption condition."""
-    os.makedirs(output_dir, exist_ok=True)
-    corruption = data["corruption"]
+def plot_corruption(data, outdir):
+    os.makedirs(outdir, exist_ok=True)
+    corr = data["corruption"]
+    mdls = list(corr.keys())
+    dsets = sorted(set(d for m in mdls for d in corr[m]))
+    conds = [c for c in CORRUPTION_CONDITIONS if c != "none"]
 
-    models = list(corruption.keys())
-    datasets = set()
-    for m in models:
-        datasets.update(corruption[m].keys())
-    datasets = sorted(datasets)
+    fig, axes = plt.subplots(1, len(dsets), figsize=(7*len(dsets), 5),
+                             squeeze=False)
+    pal = sns.color_palette("tab10", len(mdls))
 
-    conditions = [c for c in CORRUPTION_CONDITIONS if c != "none"]
-
-    fig, axes = plt.subplots(1, len(datasets), figsize=(7 * len(datasets), 5), squeeze=False)
-    colors = sns.color_palette("husl", len(models))
-
-    for j, dataset in enumerate(datasets):
+    for j, ds in enumerate(dsets):
         ax = axes[0][j]
-        x = np.arange(len(conditions))
-        width = 0.8 / max(len(models), 1)
-
-        for i, model in enumerate(models):
-            if dataset not in corruption[model]:
+        x = np.arange(len(conds))
+        w = 0.8 / max(len(mdls), 1)
+        for i, m in enumerate(mdls):
+            if ds not in corr[m]:
                 continue
-
-            cfr_vals = []
-            ci_lo = []
-            ci_hi = []
-            for cond in conditions:
-                entry = corruption[model][dataset].get(cond, {})
-                cfr_vals.append(entry.get("cfr", 0))
-                ci_lo.append(entry.get("ci_lower", 0))
-                ci_hi.append(entry.get("ci_upper", 0))
-
-            offset = (i - len(models) / 2 + 0.5) * width
-            bars = ax.bar(x + offset, cfr_vals, width, label=model, color=colors[i])
-            ax.errorbar(
-                x + offset, cfr_vals,
-                yerr=[
-                    [v - lo for v, lo in zip(cfr_vals, ci_lo)],
-                    [hi - v for v, hi in zip(cfr_vals, ci_hi)],
-                ],
-                fmt="none", ecolor="gray", capsize=3,
-            )
-
+            vals, cl, ch = [], [], []
+            for c in conds:
+                e = corr[m][ds].get(c, {})
+                vals.append(e.get("cfr", 0))
+                cl.append(e.get("ci_lower", 0))
+                ch.append(e.get("ci_upper", 0))
+            off = (i - len(mdls)/2 + 0.5) * w
+            ax.bar(x + off, vals, w, label=m, color=pal[i])
+            ax.errorbar(x + off, vals,
+                        yerr=[[v - l for v, l in zip(vals, cl)],
+                              [h - v for v, h in zip(vals, ch)]],
+                        fmt="none", ecolor="gray", capsize=3)
         ax.set_ylabel("Corruption Following Rate (CFR)")
-        ax.set_title(f"Corruption: {dataset.upper()}")
+        ax.set_title("Corruption: " + ds.upper())
         ax.set_xticks(x)
-        ax.set_xticklabels(conditions, rotation=30, ha="right")
+        ax.set_xticklabels(conds, rotation=30, ha="right")
         ax.set_ylim(0, 1.0)
         ax.legend()
 
     plt.tight_layout()
-    path = os.path.join(output_dir, "corruption_cfr.png")
-    plt.savefig(path, dpi=150)
-    plt.close()
-    print(f"  Saved {path}")
+    p = os.path.join(outdir, "corruption_cfr.png")
+    plt.savefig(p, dpi=150); plt.close()
+    print("  Saved", p)
 
 
-# ---------- Plot 4: Biased Hints - HAR, SBH, Steering Rate ----------
+# -------- biased hints line plots --------
 
-def plot_biased_hints(data: dict, output_dir: str = FIGURES_DIR) -> None:
-    """Multi-panel plot for hint experiment metrics."""
-    os.makedirs(output_dir, exist_ok=True)
+def plot_biased_hints(data, outdir):
+    os.makedirs(outdir, exist_ok=True)
     hints = data["biased_hints"]
-
-    models = list(hints.keys())
-    datasets = set()
-    for m in models:
-        datasets.update(hints[m].keys())
-    datasets = sorted(datasets)
-
+    mdls = list(hints.keys())
+    dsets = sorted(set(d for m in mdls for d in hints[m]))
     strengths = list(HINT_TEMPLATES.keys())
-    metric_names = [("har", "Hint Acknowledgment Rate"), ("sbh", "Steered-But-Hidden Rate"), ("steering_rate", "Steering Rate")]
+    metrics = [("har", "Hint Acknowledgment Rate"),
+               ("sbh", "Steered-But-Hidden Rate"),
+               ("steering_rate", "Steering Rate")]
 
-    for dataset in datasets:
+    pal = sns.color_palette("tab10", len(mdls))
+    for ds in dsets:
         fig, axes = plt.subplots(1, 3, figsize=(18, 5))
-        colors = sns.color_palette("husl", len(models))
-
-        for k, (metric_key, metric_label) in enumerate(metric_names):
+        for k, (mkey, mlabel) in enumerate(metrics):
             ax = axes[k]
-
-            for i, model in enumerate(models):
-                if dataset not in hints[model]:
+            for i, m in enumerate(mdls):
+                if ds not in hints[m]:
                     continue
-
-                vals = []
-                for s in strengths:
-                    entry = hints[model][dataset].get(s, {})
-                    vals.append(entry.get(metric_key, 0))
-
-                ax.plot(strengths, vals, marker="s", label=model, color=colors[i], linewidth=2)
-
+                vals = [hints[m][ds].get(s, {}).get(mkey, 0) for s in strengths]
+                ax.plot(strengths, vals, "s-", label=m, color=pal[i], lw=2)
             ax.set_xlabel("Hint Strength")
-            ax.set_ylabel(metric_label)
-            ax.set_title(f"{metric_label}\n({dataset.upper()})")
+            ax.set_ylabel(mlabel)
+            ax.set_title(mlabel + " (" + ds.upper() + ")")
             ax.set_ylim(0, 1.0)
             ax.legend()
-
         plt.tight_layout()
-        path = os.path.join(output_dir, f"biased_hints_{dataset}.png")
-        plt.savefig(path, dpi=150)
-        plt.close()
-        print(f"  Saved {path}")
+        p = os.path.join(outdir, "biased_hints_%s.png" % ds)
+        plt.savefig(p, dpi=150); plt.close()
+        print("  Saved", p)
 
 
-# ---------- Plot 5: Outcome Distribution Heatmap ----------
+# -------- outcome heatmap --------
 
-def plot_outcome_heatmap(data: dict, output_dir: str = FIGURES_DIR) -> None:
-    """Heatmap showing outcome distribution for hint experiment."""
-    os.makedirs(output_dir, exist_ok=True)
+def plot_outcome_heatmap(data, outdir):
+    os.makedirs(outdir, exist_ok=True)
     hints = data["biased_hints"]
-
-    models = list(hints.keys())
-    datasets = set()
-    for m in models:
-        datasets.update(hints[m].keys())
-    datasets = sorted(datasets)
-
+    mdls = list(hints.keys())
+    dsets = sorted(set(d for m in mdls for d in hints[m]))
     strengths = list(HINT_TEMPLATES.keys())
-    outcome_types = ["FAITHFUL_REJECT", "FAITHFUL_FOLLOW", "UNFAITHFUL_IGNORE", "STEERED_BUT_HIDDEN"]
+    outcomes = ["FAITHFUL_REJECT", "FAITHFUL_FOLLOW",
+                "UNFAITHFUL_IGNORE", "STEERED_BUT_HIDDEN"]
 
-    for model in models:
-        for dataset in datasets:
-            if dataset not in hints[model]:
+    for m in mdls:
+        for ds in dsets:
+            if ds not in hints[m]:
                 continue
-
-            matrix = []
+            grid = []
             for s in strengths:
-                entry = hints[model][dataset].get(s, {})
-                counts = entry.get("outcome_counts", {})
-                total = sum(counts.values()) or 1
-                row = [counts.get(o, 0) / total for o in outcome_types]
-                matrix.append(row)
+                counts = hints[m][ds].get(s, {}).get("outcome_counts", {})
+                tot = sum(counts.values()) or 1
+                grid.append([counts.get(o, 0) / tot for o in outcomes])
 
             fig, ax = plt.subplots(figsize=(8, 4))
-            sns.heatmap(
-                np.array(matrix),
-                annot=True, fmt=".2f",
-                xticklabels=[o.replace("_", "\n") for o in outcome_types],
-                yticklabels=strengths,
-                cmap="YlOrRd", vmin=0, vmax=1,
-                ax=ax,
-            )
-            model_safe = model.replace(":", "_").replace("/", "_")
-            ax.set_title(f"Outcome Distribution: {model} / {dataset.upper()}")
+            sns.heatmap(np.array(grid), annot=True, fmt=".2f",
+                        xticklabels=[o.replace("_", "\n") for o in outcomes],
+                        yticklabels=strengths,
+                        cmap="YlOrRd", vmin=0, vmax=1, ax=ax)
+            tag = m.replace(":", "_").replace("/", "_")
+            ax.set_title("Outcome Distribution: %s / %s" % (m, ds.upper()))
             ax.set_ylabel("Hint Strength")
-
             plt.tight_layout()
-            path = os.path.join(output_dir, f"heatmap_{model_safe}_{dataset}.png")
-            plt.savefig(path, dpi=150)
-            plt.close()
-            print(f"  Saved {path}")
+            p = os.path.join(outdir, "heatmap_%s_%s.png" % (tag, ds))
+            plt.savefig(p, dpi=150); plt.close()
+            print("  Saved", p)
 
 
-# ---------- Summary Table ----------
+# -------- summary table --------
 
-def print_summary_table(data: dict) -> None:
-    """Print a text summary table of key metrics."""
+def print_summary_table(data):
     print("\n" + "=" * 80)
     print("EXPERIMENT SUMMARY")
     print("=" * 80)
 
-    # Baseline
     print("\n--- Baseline Accuracy ---")
-    for model, datasets in data["baseline"].items():
-        for dataset, vals in datasets.items():
-            print(f"  {model:20s} | {dataset:8s} | No-CoT: {vals['no_cot_accuracy']:.3f} | CoT: {vals['cot_accuracy']:.3f}")
+    for m, dsets in data["baseline"].items():
+        for ds, v in dsets.items():
+            print("  %-20s | %-8s | No-CoT: %.3f | CoT: %.3f"
+                  % (m, ds, v["no_cot_accuracy"], v["cot_accuracy"]))
 
-    # Truncation
     print("\n--- Truncation SCR (step 1) ---")
-    for model, datasets in data["truncation"].items():
-        for dataset, vals in datasets.items():
-            scr_data = vals.get("scr_by_step", [])
-            if scr_data:
-                scr1 = scr_data[0]["scr"]
-                print(f"  {model:20s} | {dataset:8s} | SCR@step1: {scr1:.3f}")
+    for m, dsets in data["truncation"].items():
+        for ds, v in dsets.items():
+            rows = v.get("scr_by_step", [])
+            if rows:
+                print("  %-20s | %-8s | SCR@step1: %.3f" % (m, ds, rows[0]["scr"]))
 
-    # Corruption
     print("\n--- Corruption CFR ---")
-    for model, datasets in data["corruption"].items():
-        for dataset, conds in datasets.items():
-            parts = []
-            for cond in ["early", "middle", "late", "early_late", "all"]:
-                if cond in conds:
-                    parts.append(f"{cond}={conds[cond]['cfr']:.3f}")
-            print(f"  {model:20s} | {dataset:8s} | {' | '.join(parts)}")
+    for m, dsets in data["corruption"].items():
+        for ds, conds in dsets.items():
+            bits = []
+            for c in ["early", "middle", "late", "early_late", "all"]:
+                if c in conds:
+                    bits.append("%s=%.3f" % (c, conds[c]["cfr"]))
+            print("  %-20s | %-8s | %s" % (m, ds, " | ".join(bits)))
 
-    # Hints
     print("\n--- Biased Hints (Authoritative) ---")
-    for model, datasets in data["biased_hints"].items():
-        for dataset, strengths in datasets.items():
-            auth = strengths.get("authoritative", {})
-            print(f"  {model:20s} | {dataset:8s} | HAR: {auth.get('har', 0):.3f} | SBH: {auth.get('sbh', 0):.3f} | Steering: {auth.get('steering_rate', 0):.3f}")
+    for m, dsets in data["biased_hints"].items():
+        for ds, strs in dsets.items():
+            a = strs.get("authoritative", {})
+            print("  %-20s | %-8s | HAR: %.3f | SBH: %.3f | Steering: %.3f"
+                  % (m, ds, a.get("har", 0), a.get("sbh", 0),
+                     a.get("steering_rate", 0)))
 
-    # Cross-model
     if data.get("cross_model_comparison"):
         print("\n--- Cross-Model Comparison (McNemar's test) ---")
-        for dataset, comparisons in data["cross_model_comparison"].items():
-            for pair, vals in comparisons.items():
-                sig = "SIGNIFICANT" if vals["mcnemar_pvalue"] < 0.05 else "not significant"
-                print(f"  {dataset:8s} | {pair} | p={vals['mcnemar_pvalue']:.4f} ({sig})")
-
+        for ds, comps in data["cross_model_comparison"].items():
+            for pair, v in comps.items():
+                sig = "SIGNIFICANT" if v["mcnemar_pvalue"] < 0.05 else "not significant"
+                print("  %-8s | %s | p=%.4f (%s)"
+                      % (ds, pair, v["mcnemar_pvalue"], sig))
     print("\n" + "=" * 80)
 
 
-# ---------- Main ----------
+# -------- entrypoint --------
 
-def generate_all_plots(input_dir: str = RESULTS_DIR, output_dir: str = FIGURES_DIR) -> None:
-    """Generate all plots from aggregated results."""
-    data = load_aggregated(input_dir)
-
+def generate_all_plots(input_dir=config.RESULTS_DIR, output_dir=config.FIGURES_DIR):
+    data = _load_agg(input_dir)
     print("Generating plots...")
     plot_baseline(data, output_dir)
     plot_truncation(data, output_dir)
@@ -346,9 +271,8 @@ def generate_all_plots(input_dir: str = RESULTS_DIR, output_dir: str = FIGURES_D
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate visualizations from experiment results.")
-    parser.add_argument("--input", default=RESULTS_DIR, help="Input results directory")
-    parser.add_argument("--output", default=FIGURES_DIR, help="Output figures directory")
-    args = parser.parse_args()
-
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--input", default=config.RESULTS_DIR)
+    ap.add_argument("--output", default=config.FIGURES_DIR)
+    args = ap.parse_args()
     generate_all_plots(args.input, args.output)

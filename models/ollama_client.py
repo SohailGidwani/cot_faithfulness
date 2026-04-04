@@ -1,36 +1,23 @@
-"""Unified Ollama interface with retry logic."""
-
 from __future__ import annotations
-
 import time
 import ollama
+from config import TEMP, MAX_TOKENS, RETRIES
 
-from config import OLLAMA_TEMPERATURE, OLLAMA_NUM_PREDICT, OLLAMA_MAX_RETRIES
 
-
-def query_model(
-    model: str,
-    prompt: str,
-    max_retries: int = OLLAMA_MAX_RETRIES,
-    temperature: float = OLLAMA_TEMPERATURE,
-    num_predict: int = OLLAMA_NUM_PREDICT,
-) -> str:
-    """Query an Ollama model with retry logic.
-
-    Returns the model's response text.
-    """
+def query_model(model, prompt, max_retries=RETRIES, temperature=TEMP,
+                num_predict=MAX_TOKENS):
     for attempt in range(max_retries):
         try:
-            response = ollama.chat(
+            resp = ollama.chat(
                 model=model,
                 messages=[{"role": "user", "content": prompt}],
                 options={"temperature": temperature, "num_predict": num_predict},
             )
-            return response["message"]["content"]
-        except Exception as e:
+            return resp["message"]["content"]
+        except Exception as exc:
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)
             else:
                 raise RuntimeError(
-                    f"Failed to query {model} after {max_retries} attempts: {e}"
-                ) from e
+                    "query to %s failed after %d tries: %s" % (model, max_retries, exc)
+                ) from exc

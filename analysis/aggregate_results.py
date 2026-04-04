@@ -1,140 +1,124 @@
-"""Aggregate results from all experiments into a unified summary."""
-
 from __future__ import annotations
-
-import json
-import os
+import json, os
 import numpy as np
 from datetime import datetime
 
-from config import RESULTS_DIR, MODELS, DATASETS, SAMPLES_PER_DATASET, CORRUPTION_CONDITIONS, HINT_TEMPLATES
+import config
+from config import MODELS, DATASETS, NUM_SAMPLES, CORRUPTION_CONDITIONS, HINT_TEMPLATES
 from metrics.statistical_tests import mcnemar_test
 
 
-def load_json(path: str) -> dict | None:
+def _load(path):
     if os.path.exists(path):
-        with open(path) as f:
-            return json.load(f)
+        with open(path) as fh:
+            return json.load(fh)
     return None
 
-
-def _model_safe(model: str) -> str:
+def _safe(model):
     return model.replace(":", "_").replace("/", "_")
 
 
-def aggregate_all(models: list[str] = MODELS, datasets: list[str] = DATASETS) -> dict:
-    """Aggregate all experiment results into a unified JSON structure."""
-
-    output = {
+def aggregate_all(models=MODELS, datasets=DATASETS):
+    out = {
         "metadata": {
             "timestamp": datetime.now().isoformat(),
-            "models": models,
-            "datasets": datasets,
-            "samples_per_dataset": SAMPLES_PER_DATASET,
+            "models": models, "datasets": datasets,
+            "samples_per_dataset": NUM_SAMPLES,
         },
-        "baseline": {},
-        "truncation": {},
-        "corruption": {},
-        "biased_hints": {},
-        "cross_model_comparison": {},
+        "baseline": {}, "truncation": {}, "corruption": {},
+        "biased_hints": {}, "cross_model_comparison": {},
     }
 
-    for model in models:
-        ms = _model_safe(model)
-        output["baseline"][model] = {}
-        output["truncation"][model] = {}
-        output["corruption"][model] = {}
-        output["biased_hints"][model] = {}
+    for m in models:
+        ms = _safe(m)
+        out["baseline"][m] = {}
+        out["truncation"][m] = {}
+        out["corruption"][m] = {}
+        out["biased_hints"][m] = {}
 
-        for dataset in datasets:
-            # --- Baseline ---
-            base = load_json(os.path.join(RESULTS_DIR, "baseline", f"{ms}_{dataset}.json"))
-            if base:
-                output["baseline"][model][dataset] = {
-                    "no_cot_accuracy": base["no_cot_accuracy"],
-                    "cot_accuracy": base["cot_accuracy"],
-                    "n_total": base["n_total"],
+        for ds in datasets:
+            # baseline
+            bl = _load(os.path.join(config.RESULTS_DIR, "baseline", "%s_%s.json" % (ms, ds)))
+            if bl:
+                out["baseline"][m][ds] = {
+                    "no_cot_accuracy": bl["no_cot_accuracy"],
+                    "cot_accuracy": bl["cot_accuracy"],
+                    "n_total": bl["n_total"],
                 }
 
-            # --- Truncation ---
-            trunc = load_json(os.path.join(RESULTS_DIR, "truncation", f"{ms}_{dataset}.json"))
-            if trunc:
-                scr_summary = []
-                for entry in trunc.get("scr_by_step", []):
-                    scr_summary.append({
-                        "step_k": entry["step_k"],
-                        "scr": entry["scr"],
-                        "ci_lower": entry["ci_lower"],
-                        "ci_upper": entry["ci_upper"],
-                        "n_samples": entry.get("n_samples_with_this_step", 0),
+            # truncation
+            tr = _load(os.path.join(config.RESULTS_DIR, "truncation", "%s_%s.json" % (ms, ds)))
+            if tr:
+                rows = []
+                for e in tr.get("scr_by_step", []):
+                    rows.append({
+                        "step_k": e["step_k"], "scr": e["scr"],
+                        "ci_lower": e["ci_lower"], "ci_upper": e["ci_upper"],
+                        "n_samples": e.get("n_samples_with_this_step", 0),
                     })
-                output["truncation"][model][dataset] = {
-                    "scr_by_step": scr_summary,
-                    "max_steps_seen": trunc.get("max_steps_seen", 0),
+                out["truncation"][m][ds] = {
+                    "scr_by_step": rows,
+                    "max_steps_seen": tr.get("max_steps_seen", 0),
                 }
 
-            # --- Corruption ---
-            corr = load_json(os.path.join(RESULTS_DIR, "corruption", f"{ms}_{dataset}.json"))
-            if corr:
-                cfr_summary = {}
-                for cond, metrics in corr.get("cfr_by_condition", {}).items():
-                    cfr_summary[cond] = {
-                        "cfr": metrics["cfr"],
-                        "ci_lower": metrics.get("ci_lower", 0),
-                        "ci_upper": metrics.get("ci_upper", 0),
-                        "n_total": metrics["n_total"],
+            # corruption
+            cr = _load(os.path.join(config.RESULTS_DIR, "corruption", "%s_%s.json" % (ms, ds)))
+            if cr:
+                cfr_map = {}
+                for cond, met in cr.get("cfr_by_condition", {}).items():
+                    cfr_map[cond] = {
+                        "cfr": met["cfr"],
+                        "ci_lower": met.get("ci_lower", 0),
+                        "ci_upper": met.get("ci_upper", 0),
+                        "n_total": met["n_total"],
                     }
-                output["corruption"][model][dataset] = cfr_summary
+                out["corruption"][m][ds] = cfr_map
 
-            # --- Biased Hints ---
-            hints = load_json(os.path.join(RESULTS_DIR, "biased_hints", f"{ms}_{dataset}.json"))
-            if hints:
-                hint_summary = {}
-                for strength, metrics in hints.get("metrics_by_strength", {}).items():
-                    hint_summary[strength] = {
-                        "har": metrics["har"]["har"],
-                        "har_ci": [metrics["har"]["ci_lower"], metrics["har"]["ci_upper"]],
-                        "sbh": metrics["sbh"]["sbh"],
-                        "sbh_ci": [metrics["sbh"]["ci_lower"], metrics["sbh"]["ci_upper"]],
-                        "steering_rate": metrics["steering_rate"],
-                        "outcome_counts": metrics["outcome_counts"],
+            # biased hints
+            bh = _load(os.path.join(config.RESULTS_DIR, "biased_hints", "%s_%s.json" % (ms, ds)))
+            if bh:
+                hmap = {}
+                for stren, met in bh.get("metrics_by_strength", {}).items():
+                    hmap[stren] = {
+                        "har": met["har"]["har"],
+                        "har_ci": [met["har"]["ci_lower"], met["har"]["ci_upper"]],
+                        "sbh": met["sbh"]["sbh"],
+                        "sbh_ci": [met["sbh"]["ci_lower"], met["sbh"]["ci_upper"]],
+                        "steering_rate": met["steering_rate"],
+                        "outcome_counts": met["outcome_counts"],
                     }
-                output["biased_hints"][model][dataset] = hint_summary
+                out["biased_hints"][m][ds] = hmap
 
-    # --- Cross-model comparison (McNemar's test) ---
+    # cross-model mcnemar
     if len(models) >= 2:
-        for dataset in datasets:
-            pair_key = f"{models[0]}_vs_{models[1]}"
-            results_a = load_json(os.path.join(RESULTS_DIR, "baseline", f"{_model_safe(models[0])}_{dataset}.json"))
-            results_b = load_json(os.path.join(RESULTS_DIR, "baseline", f"{_model_safe(models[1])}_{dataset}.json"))
+        for ds in datasets:
+            rA = _load(os.path.join(config.RESULTS_DIR, "baseline",
+                                    "%s_%s.json" % (_safe(models[0]), ds)))
+            rB = _load(os.path.join(config.RESULTS_DIR, "baseline",
+                                    "%s_%s.json" % (_safe(models[1]), ds)))
+            if rA and rB:
+                a_ok = [r["cot_correct"] for r in rA["results"]]
+                b_ok = [r["cot_correct"] for r in rB["results"]]
+                n = min(len(a_ok), len(b_ok))
+                both_r = sum(a_ok[i] and b_ok[i] for i in range(n))
+                a_only = sum(a_ok[i] and not b_ok[i] for i in range(n))
+                b_only = sum(not a_ok[i] and b_ok[i] for i in range(n))
+                both_w = sum(not a_ok[i] and not b_ok[i] for i in range(n))
 
-            if results_a and results_b:
-                # Build contingency table for CoT accuracy
-                a_correct = [r["cot_correct"] for r in results_a["results"]]
-                b_correct = [r["cot_correct"] for r in results_b["results"]]
-                n = min(len(a_correct), len(b_correct))
+                tbl = np.array([[both_r, a_only], [b_only, both_w]])
+                tst = mcnemar_test(tbl)
 
-                both_correct = sum(a_correct[i] and b_correct[i] for i in range(n))
-                a_only = sum(a_correct[i] and not b_correct[i] for i in range(n))
-                b_only = sum(not a_correct[i] and b_correct[i] for i in range(n))
-                both_wrong = sum(not a_correct[i] and not b_correct[i] for i in range(n))
-
-                table = np.array([[both_correct, a_only], [b_only, both_wrong]])
-                test_result = mcnemar_test(table)
-
-                if dataset not in output["cross_model_comparison"]:
-                    output["cross_model_comparison"][dataset] = {}
-
-                output["cross_model_comparison"][dataset][pair_key] = {
-                    "mcnemar_pvalue": test_result["pvalue"],
-                    "mcnemar_statistic": test_result["statistic"],
-                    "contingency_table": table.tolist(),
+                key = "%s_vs_%s" % (models[0], models[1])
+                if ds not in out["cross_model_comparison"]:
+                    out["cross_model_comparison"][ds] = {}
+                out["cross_model_comparison"][ds][key] = {
+                    "mcnemar_pvalue": tst["pvalue"],
+                    "mcnemar_statistic": tst["statistic"],
+                    "contingency_table": tbl.tolist(),
                 }
 
-    # Save aggregated output
-    out_path = os.path.join(RESULTS_DIR, "aggregated_results.json")
-    with open(out_path, "w") as f:
-        json.dump(output, f, indent=2)
-    print(f"Aggregated results saved to {out_path}")
-
-    return output
+    dest = os.path.join(config.RESULTS_DIR, "aggregated_results.json")
+    with open(dest, "w") as fh:
+        json.dump(out, fh, indent=2)
+    print("Aggregated results ->", dest)
+    return out
