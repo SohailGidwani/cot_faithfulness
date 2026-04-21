@@ -25,3 +25,13 @@ env/
 # Data cache (HuggingFace datasets)
 data/*.cache
 .cache/
+
+.claude/
+.cursor/
+.cursorrules
+.mcp.json
+.opencode.json
+.windsurfrules
+AGENTS.md
+CLAUDE.md
+GEMINI.md
