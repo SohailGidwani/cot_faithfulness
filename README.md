@@ -166,7 +166,7 @@ cot_faithfulness/
 │   ├── biased_hints/
 │   └── aggregated_results.json
 │
-└── figures/                         # Generated PNG plots (9 total)
+└── figures/                         # Generated PNG plots (9 from visualize.py)
     ├── baseline_accuracy.png
     ├── truncation_scr.png
     ├── corruption_cfr.png
@@ -175,15 +175,67 @@ cot_faithfulness/
     ├── heatmap_llama3.2_3b_gsm8k.png
     ├── heatmap_llama3.2_3b_arc.png
     ├── heatmap_qwen2.5_7b_gsm8k.png
-    └── heatmap_qwen2.5_7b_arc.png
+    ├── heatmap_qwen2.5_7b_arc.png
+    ├── faithfulness_summary.png      # generated separately for the report
+    └── make_summary_fig.py           # script to regenerate faithfulness_summary.png
 ```
 
-## Setup
+## System
+
+All experiments were run on a local machine with the following specifications:
+
+| Component | Details |
+|-----------|---------|
+| OS | macOS 26.5 (Apple Silicon) |
+| CPU/SoC | Apple M4 Pro |
+| RAM | 24 GB unified memory |
+| Python | 3.13.9 |
+| Inference | Ollama (local, CPU/Metal, no GPU/CUDA required) |
+
+No cloud compute or external API calls were used. Both models run entirely on-device through Ollama, which handles model loading and inference locally.
+
+## Environment Setup
+
+**Step 1: Install Ollama**
+
+Download and install Ollama from [https://ollama.com](https://ollama.com), or via Homebrew:
 
 ```bash
-pip install -r requirements.txt
+brew install ollama
+```
+
+Start the Ollama server (runs in the background):
+
+```bash
+ollama serve
+```
+
+**Step 2: Pull the models**
+
+```bash
 ollama pull llama3.2:3b
 ollama pull qwen2.5:7b
+```
+
+Each model downloads once and is cached locally. `llama3.2:3b` is ~2 GB and `qwen2.5:7b` is ~4.7 GB.
+
+**Step 3: Set up Python environment**
+
+Python 3.13+ is required. A virtual environment is recommended:
+
+```bash
+python3 -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+The `requirements.txt` installs: `ollama`, `datasets`, `scipy`, `numpy`, `pandas`, `matplotlib`, `seaborn`, `tqdm`.
+
+**Step 4: Verify the setup**
+
+```bash
+ollama list              # should show llama3.2:3b and qwen2.5:7b
+python3 -c "import ollama, datasets, scipy; print('OK')"
 ```
 
 ## Usage
@@ -212,6 +264,56 @@ python analysis/visualize.py --input results/ --output figures/
 ```
 
 The `--skip-*` and `--only` flags let you resume partial runs. Intermediate results are saved after each experiment, so a crash mid-run doesn't lose earlier work. All raw model responses are stored in the per-experiment JSON files for debugging.
+
+## How Results Are Generated
+
+The full pipeline runs in this order:
+
+```
+raw datasets  →  Ollama (local inference)  →  JSON results  →  metrics  →  figures
+```
+
+**1. Data loading**
+
+`data/gsm8k_loader.py` and `data/arc_loader.py` fetch the datasets from Hugging Face (`openai/gsm8k` and `allenai/ai2_arc`) and sample 250 examples each using `seed=42` for reproducibility.
+
+**2. Model queries**
+
+`models/ollama_client.py` sends prompts to the locally running Ollama server and receives text responses. All queries use `temperature=0.0` (greedy decoding) and `num_predict=1024`. Exponential backoff handles transient errors.
+
+**3. Experiments**
+
+Each experiment reads the previous one's outputs and writes its own JSON to `results/`:
+
+| Experiment | Script | Input | Output |
+|-----------|--------|-------|--------|
+| Exp 0: Baseline | `experiments/baseline.py` | raw questions | `results/baseline/<model>_<dataset>.json` |
+| Exp 1: Truncation | `experiments/truncation.py` | baseline CoT responses | `results/truncation/<model>_<dataset>.json` |
+| Exp 2: Corruption | `experiments/corruption_exp.py` | baseline CoT responses | `results/corruption/<model>_<dataset>.json` |
+| Exp 3: Biased Hints | `experiments/biased_hints.py` | raw questions + correct answers | `results/biased_hints/<model>_<dataset>.json` |
+
+All raw model responses are stored in the JSON files so metrics can be recomputed later without re-querying models.
+
+**4. Answer extraction**
+
+`parsing/answer_extractor.py` extracts the final answer from each model response using regex patterns. For GSM8K it looks for `#### N`, `answer is N`, or the last number. For ARC it looks for `answer is (X)`, a trailing letter, or the first valid choice label.
+
+**5. Metrics**
+
+`metrics/` computes SCR, CFR, HAR, and SBH from the per-sample JSON records, including 95% Wald confidence intervals. `metrics/statistical_tests.py` runs McNemar's exact test for cross-model comparison.
+
+**6. Aggregation and visualization**
+
+```bash
+PYTHONPATH=. python analysis/aggregate_results.py   # builds results/aggregated_results.json
+python analysis/visualize.py                        # writes 9 PNG plots to figures/
+```
+
+`analysis/aggregate_results.py` reads all per-experiment JSONs and merges them into a single `aggregated_results.json`. `analysis/visualize.py` reads that file and produces all 9 plots and the summary table.
+
+**Runtime**
+
+A full run across both models and datasets takes approximately 6 hours on an Apple M4 Pro. The `--only` and `--skip-*` flags allow resuming from any point if the run is interrupted.
 
 ## Results
 
@@ -307,6 +409,12 @@ All raw model responses are saved in `results/` as JSON, so any metric can be re
 
 ## References
 
-- Wei, J., et al. (2022). "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models." NeurIPS 2022.
+- Arcuschin, I., et al. (2025). "Chain-of-Thought Reasoning In The Wild Is Not Always Faithful." arXiv:2503.08679.
+- Chua, W. and Evans, O. (2025). "Are Reasoning Models More Faithful?" arXiv:2501.08156.
+- Clark, P., et al. (2018). "Think You Have Solved Question Answering? Try ARC, the AI2 Reasoning Challenge." arXiv:1803.05457.
+- Cobbe, K., et al. (2021). "Training Verifiers to Solve Math Word Problems." arXiv:2110.14168.
+- Elhage, N., et al. (2021). "A Mathematical Framework for Transformer Circuits." Transformer Circuits Thread.
+- Kojima, T., et al. (2022). "Large Language Models are Zero-Shot Reasoners." arXiv:2205.11916.
 - Lanham, T., et al. (2023). "Measuring Faithfulness in Chain-of-Thought Reasoning." arXiv:2307.13702.
 - Turpin, M., et al. (2023). "Language Models Don't Always Say What They Think: Unfaithful Explanations in Chain-of-Thought Prompting." NeurIPS 2023.
+- Wei, J., et al. (2022). "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models." NeurIPS 2022.
